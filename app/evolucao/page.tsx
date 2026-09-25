@@ -3,8 +3,9 @@
 
 import { useState, useEffect } from 'react';
 import Link from 'next/link';
+import WorkoutHeatmap from '@/components/WorkoutHeatmap';
 
-const USER_ID = '00000000-0000-0000-0000-000000000001';
+const USER_ID = '1';
 
 interface ProgressPoint {
   session_date: string;
@@ -17,6 +18,23 @@ export default function EvolucaoPage() {
   const [selectedExerciseId, setSelectedExerciseId] = useState<string>('');
   const [history, setHistory] = useState<ProgressPoint[]>([]);
   const [loading, setLoading] = useState(false);
+
+  const [trainedDates, setTrainedDates] = useState<string[]>([]);
+
+  useEffect(() => {
+    async function loadStreak() {
+      try {
+        const res = await fetch(`/api/workout-streak?userId=${USER_ID}`);
+        const data = await res.json();
+        if (data.trainedDates) {
+          setTrainedDates(data.trainedDates);
+        }
+      } catch (err) {
+        console.error('Erro ao buscar streak:', err);
+      }
+    }
+    loadStreak();
+  }, []);
 
   // Carrega a lista de exercícios que já possuem logs
   useEffect(() => {
@@ -87,6 +105,8 @@ export default function EvolucaoPage() {
       </div>
 
       <h1 style={{ margin: '0 0 8px 0' }}>📈 Comprovação de Resultados</h1>
+      {/* Marcador de Hábitos e Consistência */}
+      <WorkoutHeatmap trainedDates={trainedDates} />
       <p style={{ color: '#666', marginTop: 0, marginBottom: '24px' }}>
         Acompanhe a sobrecarga progressiva e o volume de carga que você construiu.
       </p>
