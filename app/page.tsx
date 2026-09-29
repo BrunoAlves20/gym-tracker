@@ -11,6 +11,7 @@ export default function HomePage() {
   const [loading, setLoading] = useState(false);
   const [activePlan, setActivePlan] = useState<any>(null);
   const [selectedExercise, setSelectedExercise] = useState<any>(null);
+  const [verifying, setVerifying] = useState(false);
 
   // Formulário da Entrevista
   const [formData, setFormData] = useState({
@@ -60,6 +61,29 @@ export default function HomePage() {
       alert('Erro ao criar treino: ' + err.message);
     } finally {
       setLoading(false);
+    }
+  }
+
+  async function handleVoteMedia(status: 'verified' | 'rejected') {
+    if (!selectedExercise) return;
+    setVerifying(true);
+    const exId = selectedExercise.exercise_id || selectedExercise.id;
+
+    try {
+      const res = await fetch('/api/verify-exercise', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ exerciseId: exId, status })
+      });
+
+      if (res.ok) {
+        // Atualiza em tempo real no modal
+        setSelectedExercise((prev: any) => ({ ...prev, media_status: status }));
+      }
+    } catch (err) {
+      console.error('Falha ao registrar auditoria:', err);
+    } finally {
+      setVerifying(false);
     }
   }
 
@@ -215,24 +239,12 @@ export default function HomePage() {
                         transition: 'transform 0.15s, box-shadow 0.15s',
                         border: '1px solid #eee'
                       }}
-                      onMouseEnter={(e) => {
-                        e.currentTarget.style.transform = 'translateY(-2px)';
-                        e.currentTarget.style.boxShadow = '0 4px 12px rgba(0,0,0,0.06)';
-                      }}
-                      onMouseLeave={(e) => {
-                        e.currentTarget.style.transform = 'translateY(0)';
-                        e.currentTarget.style.boxShadow = 'none';
-                      }}
                     >
-                      {/* Miniatura com validação segura de existência de link */}
                       {ex.gif_url ? (
                         <img 
                           src={ex.gif_url} 
                           alt={ex.name} 
                           referrerPolicy="no-referrer"
-                          onError={(e) => {
-                            (e.target as HTMLElement).style.display = 'none';
-                          }}
                           style={{ width: '75px', height: '75px', objectFit: 'cover', borderRadius: '8px', backgroundColor: '#e9ecef' }}
                         />
                       ) : (
@@ -244,7 +256,7 @@ export default function HomePage() {
                       <div style={{ flex: 1 }}>
                         <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
                           <h4 style={{ margin: '0 0 4px 0', textTransform: 'capitalize', fontSize: '1.05rem' }}>{ex.name}</h4>
-                          <span style={{ fontSize: '0.75rem', color: '#6a4df4', fontWeight: 'bold' }}>🔍 Clique para expandir</span>
+                          <span style={{ fontSize: '0.75rem', color: '#6a4df4', fontWeight: 'bold' }}>🔍 Expandir & Avaliar</span>
                         </div>
                         <div style={{ fontSize: '0.85rem', color: '#666' }}>
                           <span><strong>Músculo:</strong> {ex.target_muscle}</span> | 
@@ -253,7 +265,6 @@ export default function HomePage() {
                         <div style={{ marginTop: '6px', fontWeight: 'bold', fontSize: '0.9rem', color: '#0070f3' }}>
                           {ex.target_sets} séries × {ex.target_reps} reps | Descanso: {ex.rest_seconds}s
                         </div>
-                        {ex.notes && <p style={{ margin: '4px 0 0 0', fontSize: '0.8rem', color: '#777' }}>Nota: {ex.notes}</p>}
                       </div>
                     </div>
                   ))}
@@ -264,14 +275,14 @@ export default function HomePage() {
         </section>
       )}
 
-      {/* Modal / Popup de Expansão do Exercício */}
+      {/* Modal Interativo com Validação V e X e Pesquisa Automática */}
       {selectedExercise && (
         <div 
           onClick={() => setSelectedExercise(null)}
           style={{
             position: 'fixed',
             inset: 0,
-            backgroundColor: 'rgba(0, 0, 0, 0.75)',
+            backgroundColor: 'rgba(0, 0, 0, 0.8)',
             display: 'flex',
             alignItems: 'center',
             justifyContent: 'center',
@@ -285,7 +296,7 @@ export default function HomePage() {
             style={{
               backgroundColor: '#181a20',
               color: '#fff',
-              maxWidth: '500px',
+              maxWidth: '520px',
               width: '100%',
               borderRadius: '20px',
               padding: '24px',
@@ -293,7 +304,7 @@ export default function HomePage() {
               position: 'relative'
             }}
           >
-            {/* Botão de Fechar */}
+            {/* Fechar */}
             <button 
               onClick={() => setSelectedExercise(null)}
               style={{
@@ -307,8 +318,7 @@ export default function HomePage() {
                 height: '32px',
                 borderRadius: '50%',
                 cursor: 'pointer',
-                fontWeight: 'bold',
-                fontSize: '1rem'
+                fontWeight: 'bold'
               }}
             >
               ✕
@@ -327,7 +337,7 @@ export default function HomePage() {
               </span>
             </div>
 
-            {/* Imagem Ampliada */}
+            {/* Imagem / GIF do Exercício */}
             {selectedExercise.gif_url ? (
               <img 
                 src={selectedExercise.gif_url} 
@@ -344,22 +354,127 @@ export default function HomePage() {
                 }} 
               />
             ) : (
-              <div style={{ width: '100%', height: '180px', backgroundColor: '#262a34', borderRadius: '12px', display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: '3rem', marginBottom: '16px' }}>
-                🏋️
+              <div style={{ width: '100%', height: '140px', backgroundColor: '#262a34', borderRadius: '12px', display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', marginBottom: '16px' }}>
+                <span style={{ fontSize: '2rem' }}>🏋️</span>
+                <span style={{ color: '#a4b0be', fontSize: '0.85rem', marginTop: '6px' }}>Nenhum GIF cadastrado para este exercício</span>
               </div>
             )}
 
-            {/* Instruções de Execução Biomecânica */}
-            <div style={{ backgroundColor: '#1f222a', padding: '14px', borderRadius: '10px', marginBottom: '16px' }}>
-              <h4 style={{ margin: '0 0 6px 0', color: '#2ed573', fontSize: '0.9rem' }}>Como Executar:</h4>
-              <p style={{ margin: 0, fontSize: '0.85rem', color: '#ccc', lineHeight: '1.4' }}>
-                {selectedExercise.instructions || 'Execute o movimento com amplitude controlada e foco na contração muscular.'}
+            {/* PAINEL DE VALIDAÇÃO (V ou X) PARA ANÁLISE */}
+            <div style={{ backgroundColor: '#1f222a', padding: '14px', borderRadius: '12px', marginBottom: '16px', border: '1px solid #2b2f3a' }}>
+              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '10px' }}>
+                <span style={{ fontSize: '0.85rem', fontWeight: 'bold', color: '#fff' }}>
+                  Este GIF demonstra o movimento correto?
+                </span>
+                {selectedExercise.media_status && (
+                  <span style={{ 
+                    fontSize: '0.75rem', 
+                    padding: '2px 8px', 
+                    borderRadius: '6px', 
+                    backgroundColor: selectedExercise.media_status === 'verified' ? '#1b2d2a' : '#3d1b1b',
+                    color: selectedExercise.media_status === 'verified' ? '#2ed573' : '#ff4757',
+                    fontWeight: 'bold'
+                  }}>
+                    {selectedExercise.media_status === 'verified' ? 'Marcado: Correto' : 'Marcado: Incorreto'}
+                  </span>
+                )}
+              </div>
+
+              <div style={{ display: 'flex', gap: '10px' }}>
+                <button
+                  onClick={() => handleVoteMedia('verified')}
+                  disabled={verifying}
+                  style={{
+                    flex: 1,
+                    padding: '10px',
+                    borderRadius: '8px',
+                    border: 'none',
+                    backgroundColor: '#2ed573',
+                    color: '#121418',
+                    fontWeight: 'bold',
+                    cursor: 'pointer',
+                    display: 'flex',
+                    alignItems: 'center',
+                    justifyContent: 'center',
+                    gap: '6px'
+                  }}
+                >
+                  ✓ Sim, está correto
+                </button>
+
+                <button
+                  onClick={() => handleVoteMedia('rejected')}
+                  disabled={verifying}
+                  style={{
+                    flex: 1,
+                    padding: '10px',
+                    borderRadius: '8px',
+                    border: 'none',
+                    backgroundColor: '#ff4757',
+                    color: '#fff',
+                    fontWeight: 'bold',
+                    cursor: 'pointer',
+                    display: 'flex',
+                    alignItems: 'center',
+                    justifyContent: 'center',
+                    gap: '6px'
+                  }}
+                >
+                  ✕ Não / Está com erro
+                </button>
+              </div>
+            </div>
+
+            {/* BOTÕES DE BUSCA AUTOMÁTICA EXTERNA (SEM DIGITAR NADA) */}
+            <div style={{ display: 'flex', gap: '10px', marginBottom: '16px' }}>
+              <a
+                href={`https://www.youtube.com/results?search_query=como+executar+${encodeURIComponent(selectedExercise.name)}+musculação`}
+                target="_blank"
+                rel="noopener noreferrer"
+                style={{
+                  flex: 1,
+                  backgroundColor: '#ff0000',
+                  color: '#fff',
+                  padding: '10px',
+                  borderRadius: '8px',
+                  textDecoration: 'none',
+                  fontSize: '0.85rem',
+                  fontWeight: 'bold',
+                  textAlign: 'center'
+                }}
+              >
+                ▶️ Ver no YouTube
+              </a>
+
+              <a
+                href={`https://www.google.com/search?tbm=isch&q=${encodeURIComponent(selectedExercise.name)}+exercicio+gif`}
+                target="_blank"
+                rel="noopener noreferrer"
+                style={{
+                  flex: 1,
+                  backgroundColor: '#262a34',
+                  color: '#fff',
+                  border: '1px solid #35383f',
+                  padding: '10px',
+                  borderRadius: '8px',
+                  textDecoration: 'none',
+                  fontSize: '0.85rem',
+                  fontWeight: 'bold',
+                  textAlign: 'center'
+                }}
+              >
+                🌐 Buscar GIFs na Web
+              </a>
+            </div>
+
+            {/* Instruções de Execução */}
+            <div style={{ backgroundColor: '#1f222a', padding: '12px', borderRadius: '10px' }}>
+              <h4 style={{ margin: '0 0 6px 0', color: '#6a4df4', fontSize: '0.85rem' }}>Dica do Instrutor:</h4>
+              <p style={{ margin: 0, fontSize: '0.8rem', color: '#ccc', lineHeight: '1.4' }}>
+                {selectedExercise.instructions || 'Execute com postura firme e amplitude controlada.'}
               </p>
             </div>
 
-            <div style={{ fontSize: '0.9rem', color: '#a4b0be' }}>
-              Meta prescrita: <strong style={{ color: '#fff' }}>{selectedExercise.target_sets} séries × {selectedExercise.target_reps} repetições</strong> (descanso {selectedExercise.rest_seconds}s)
-            </div>
           </div>
         </div>
       )}

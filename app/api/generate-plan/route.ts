@@ -3,57 +3,58 @@ import { NextResponse } from 'next/server';
 import { GoogleGenAI, Type } from '@google/genai';
 import { query } from '@/lib/db';
 
-const ai = new GoogleGenAI({ apiKey: process.env.GEMINI_API_KEY });
+const ai = new GoogleGenAI();
 
 export async function POST(request: Request) {
   try {
     const body = await request.json();
-    const {
-      userId,
-      goal,
-      experienceLevel,
-      frequencyDays,
-      workoutDuration,
-      limitations
-    } = body;
+    const { userId, goal, experienceLevel, frequencyDays, workoutDuration, limitations } = body;
 
-    // 1. Busca os exercícios cadastrados no banco para alimentar o repertório da IA
-    const exercisesResult = await query('SELECT id, name, target_muscle, equipment FROM exercises');
+    // 1. Busca no Neon os exercícios que possuem mídia/GIF cadastrados
+    const exercisesResult = await query(
+      `SELECT id, name, target_muscle, equipment 
+       FROM exercises 
+       WHERE gif_url IS NOT NULL`
+    );
+
     const availableExercises = exercisesResult.rows;
 
     if (availableExercises.length === 0) {
       return NextResponse.json(
-        { error: 'Nenhum exercício cadastrado no banco para montar o treino.' },
+        { error: 'Nenhum exercício com GIF encontrado no banco de dados.' },
         { status: 400 }
       );
     }
 
-    // 2. Prompt estruturado de Personal Trainer
-    const systemInstruction = `
-Você é um treinador de musculação de elite e especialista em biomecânica.
-Sua missão é estruturar uma rotina de treino personalizada com base no perfil do aluno.
+    // 2. Monta o catálogo fechado para a IA
+    const catalogList = availableExercises
+      .map((ex: any) => `- ID: "${ex.id}" | Nome: "${ex.name}" | Músculo: ${ex.target_muscle} | Equipamento: ${ex.equipment}`)
+      .join('\n');
 
-Regras obrigatórias:
-1. Selecione APENAS exercícios da lista de exercícios disponíveis fornecida. Use o "id" exato de cada um.
-2. Divida os treinos de forma equilibrada de acordo com o número de dias por semana informado (ex: 3 dias = ABC ou Full Body, 4 dias = Upper/Lower ou ABCD).
-3. Adapte o volume (séries) e repetições ao objetivo e limitações do aluno.
-4. Retorne exclusivamente o JSON estruturado conforme o esquema solicitado.
+    const systemInstruction = `
+Você é um treinador de musculação de elite com foco em biomecânica e sobrecarga progressiva.
+Gere planos de treino estruturados, seguros e altamente eficientes.
+
+REGRA MANDATÓRIA ABSOLUTA:
+Você DEVE selecionar os exercícios EXCLUSIVAMENTE a partir do catálogo a seguir.
+NÃO invente nenhum nome ou ID. Use rigorosamente o campo "ID" informado entre aspas.
+
+CATÁLOGO PERMITIDO:
+${catalogList}
 `;
 
     const userPrompt = `
-Perfil do aluno:
+Monte uma periodização personalizada para o aluno:
 - Objetivo: ${goal}
 - Nível de Experiência: ${experienceLevel}
-- Frequência: ${frequencyDays} dias na semana
-- Tempo disponível por sessão: ${workoutDuration || 60} minutos
-- Limitações/Lesões: ${limitations || 'Nenhuma'}
+- Frequência Semanal: ${frequencyDays} dias
+- Duração da Sessão: ${workoutDuration} minutos
+- Limitações / Dores: ${limitations || 'Nenhuma'}
 
-Lista de exercícios disponíveis no sistema (escolha apenas estes IDs):
-${JSON.stringify(availableExercises.map(e => ({ id: e.id, nome: e.name, musculo: e.target_muscle })))}
+Distribua os treinos uniformemente pelos ${frequencyDays} dias respeitando o descanso dos grupos musculares.
 `;
 
-    // 3. Chamada ao Gemini com resposta estruturada (Schema JSON)
-    // 3. Chamada ao Gemini com suporte a fallback caso haja sobrecarga temporária
+    // 3. Fallback original resiliente com @google/genai e schema estrito
     const generateWithFallback = async () => {
       const modelsToTry = ['gemini-3.5-flash', 'gemini-3.5-flash-lite', 'gemini-3.8-flash'];
       let lastError = null;
@@ -111,52 +112,56 @@ ${JSON.stringify(availableExercises.map(e => ({ id: e.id, nome: e.name, musculo:
     };
 
     const response = await generateWithFallback();
-    const planData = JSON.parse(response.text || '{}');
+    const rawText = response.text || '{}';
+    const planData = JSON.parse(rawText);
 
-    // 4. Salva o Plano no Banco Neon (se foi passado um userId)
-    let savedPlanId = null;
+    // 4. Persistência transacional atômica no Neon
+    await query('BEGIN');
 
-    if (userId) {
-      // Cria o plano principal
-      const planRes = await query(
-        `INSERT INTO workout_plans (user_id, title, description, is_active, source)
-         VALUES ($1, $2, $3, true, 'ai_generated') RETURNING id`,
-        [userId, planData.planTitle, planData.description]
+    await query('UPDATE workout_plans SET is_active = FALSE WHERE user_id = $1', [userId]);
+
+    const planInsert = await query(
+      `INSERT INTO workout_plans (user_id, title, description, is_active)
+       VALUES ($1, $2, $3, TRUE) RETURNING id`,
+      [userId, planData.planTitle, planData.description]
+    );
+    const planId = planInsert.rows[0].id;
+
+    for (const day of planData.days) {
+      const dayInsert = await query(
+        `INSERT INTO workout_days (plan_id, name, day_order)
+         VALUES ($1, $2, $3) RETURNING id`,
+        [planId, day.name, day.dayOrder]
       );
-      savedPlanId = planRes.rows[0].id;
+      const dayId = dayInsert.rows[0].id;
 
-      // Salva os dias e os exercícios
-      for (const day of planData.days) {
-        const dayRes = await query(
-          `INSERT INTO workout_days (plan_id, name, day_order)
-           VALUES ($1, $2, $3) RETURNING id`,
-          [savedPlanId, day.name, day.dayOrder]
-        );
-        const dayId = dayRes.rows[0].id;
-
-        for (let i = 0; i < day.exercises.length; i++) {
-          const ex = day.exercises[i];
+      let orderIdx = 1;
+      for (const ex of day.exercises) {
+        // Validação de segurança no catálogo cadastrado
+        const checkEx = await query('SELECT id FROM exercises WHERE id = $1', [ex.exerciseId]);
+        if (checkEx.rows.length > 0) {
           await query(
-            `INSERT INTO workout_day_exercises 
-             (workout_day_id, exercise_id, order_index, target_sets, target_reps, rest_seconds, notes)
-             VALUES ($1, $2, $3, $4, $5, $6, $7)`,
-            [dayId, ex.exerciseId, i + 1, ex.targetSets, ex.targetReps, ex.restSeconds || 90, ex.notes || '']
+            `INSERT INTO workout_day_exercises (
+              workout_day_id, exercise_id, order_index, target_sets, target_reps, rest_seconds, notes
+            ) VALUES ($1, $2, $3, $4, $5, $6, $7)`,
+            [dayId, ex.exerciseId, orderIdx, ex.targetSets, ex.targetReps, ex.restSeconds, ex.notes || null]
           );
+          orderIdx++;
         }
       }
     }
 
+    await query('COMMIT');
+
     return NextResponse.json({
-      status: 'sucesso',
-      planId: savedPlanId,
-      workoutPlan: planData
+      success: true,
+      message: 'Plano gerado e salvo com sucesso.',
+      planId
     });
 
   } catch (error: any) {
-    console.error('Erro ao gerar treino com IA:', error);
-    return NextResponse.json(
-      { error: 'Falha na geração do treino', details: error.message },
-      { status: 500 }
-    );
+    await query('ROLLBACK');
+    console.error('Erro na geração do treino:', error);
+    return NextResponse.json({ error: error.message }, { status: 500 });
   }
 }
